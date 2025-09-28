@@ -9,13 +9,12 @@ from captum.attr import IntegratedGradients
 from typing import Tuple, Optional
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
-import os # NEW
-import requests # NEW
+import os 
+import requests # REQUIRED FOR DOWNLOADING MODEL
 
 # --- CONFIGURATION ---
-
 HF_MODEL_URL = "https://huggingface.co/arshenoy/cerebAI-stroke-model/resolve/main/best_model.pth" 
-DOWNLOAD_MODEL_PATH = "best_model_cache.pth" # Local file name for the downloaded model
+DOWNLOAD_MODEL_PATH = "best_model_cache.pth" 
 CLASS_LABELS = ['No Stroke', 'Ischemic Stroke', 'Hemorrhagic Stroke']
 IMAGE_SIZE = 224
 DEVICE = torch.device("cpu") 
@@ -29,11 +28,9 @@ def load_model(model_url, local_path):
     if not os.path.exists(local_path):
         st.info(f"Model not found locally. Downloading from remote repository...")
         try:
-            # Using requests to download the large file reliably
             response = requests.get(model_url, stream=True)
-            response.raise_for_status() # Check for bad status codes
+            response.raise_for_status() 
             
-            # Save the file locally to the Streamlit server cache
             with open(local_path, "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
@@ -46,7 +43,6 @@ def load_model(model_url, local_path):
     try:
         model = timm.create_model('convnext_base', pretrained=False)
         model.reset_classifier(num_classes=len(CLASS_LABELS))
-        # Load the model from the downloaded file
         model.load_state_dict(torch.load(local_path, map_location=DEVICE))
         model.to(DEVICE)
         model.eval()
@@ -55,7 +51,7 @@ def load_model(model_url, local_path):
         st.error(f"Failed to load model weights from cache. Error: {e}")
         return None
 
-# --- HELPER FUNCTIONS (REMAIN THE SAME) ---
+# --- HELPER FUNCTIONS ---
 
 def denormalize_image(tensor: torch.Tensor) -> np.ndarray:
     """Denormalizes a PyTorch tensor for matplotlib visualization."""
@@ -162,7 +158,7 @@ if model is not None:
 
         with col1:
             st.subheader("Uploaded Image")
-            st.image(image_bytes, use_container_width=True) # Responsive fix
+            st.image(image_bytes, use_container_width=True) 
 
         # Run Prediction and Attribution
         input_tensor, original_image_rgb = preprocess_image(image_bytes)
