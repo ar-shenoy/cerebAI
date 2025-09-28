@@ -1,0 +1,8 @@
+# Python virtual environment
+venv/__pycache__/*.pyc
+
+# Dataset and model directories
+data/datasets/
+
+# Large Model Checkpoint (File is handled separately with Git LFS)
+# best_model.pth
