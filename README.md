@@ -23,7 +23,7 @@ The system uses **Integrated Gradients (IG)** from the Captum library to generat
 ### Local Run Instructions
 1.  **Clone the Repository:**
     ```bash
-    git clone 
+    git clone https://github.com/ar-shenoy/cerebAI.git
     cd cerebai_streamlit
     ```
 2.  **Activate Environment:** Ensure your virtual environment is active.
