@@ -6,33 +6,56 @@ import cv2
 import timm
 import matplotlib.pyplot as plt
 from captum.attr import IntegratedGradients
+from typing import Tuple, Optional
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
-from typing import Tuple, Optional
+import os # NEW
+import requests # NEW
 
 # --- CONFIGURATION ---
-MODEL_PATH = "best_model.pth"
+
+HF_MODEL_URL = "https://huggingface.co/arshenoy/cerebAI-stroke-model/resolve/main/best_model.pth" 
+DOWNLOAD_MODEL_PATH = "best_model_cache.pth" # Local file name for the downloaded model
 CLASS_LABELS = ['No Stroke', 'Ischemic Stroke', 'Hemorrhagic Stroke']
 IMAGE_SIZE = 224
-# Use CPU by default for stability in free deployment, but change this locally to 'cuda' for speed!
 DEVICE = torch.device("cpu") 
 
-# --- MODEL LOADING ---
+# --- MODEL LOADING (UPDATED FOR DOWNLOAD) ---
 @st.cache_resource
-def load_model(model_path):
-    """Loads the model architecture and saved weights."""
+def load_model(model_url, local_path):
+    """Downloads model from URL if not cached, and loads the weights."""
+    
+    # 1. Check if the file is already downloaded
+    if not os.path.exists(local_path):
+        st.info(f"Model not found locally. Downloading from remote repository...")
+        try:
+            # Using requests to download the large file reliably
+            response = requests.get(model_url, stream=True)
+            response.raise_for_status() # Check for bad status codes
+            
+            # Save the file locally to the Streamlit server cache
+            with open(local_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            st.success("Model download complete!")
+        except Exception as e:
+            st.error(f"FATAL ERROR: Could not download model from {model_url}. Check the URL. Error: {e}")
+            return None
+
+    # 2. Load the model weights
     try:
         model = timm.create_model('convnext_base', pretrained=False)
         model.reset_classifier(num_classes=len(CLASS_LABELS))
-        model.load_state_dict(torch.load(model_path, map_location=DEVICE))
+        # Load the model from the downloaded file
+        model.load_state_dict(torch.load(local_path, map_location=DEVICE))
         model.to(DEVICE)
         model.eval()
         return model
     except Exception as e:
-        st.error(f"Failed to load model. Check model file and path. Error: {e}")
+        st.error(f"Failed to load model weights from cache. Error: {e}")
         return None
 
-# --- HELPER FUNCTIONS ---
+# --- HELPER FUNCTIONS (REMAIN THE SAME) ---
 
 def denormalize_image(tensor: torch.Tensor) -> np.ndarray:
     """Denormalizes a PyTorch tensor for matplotlib visualization."""
@@ -58,10 +81,7 @@ def preprocess_image(image_bytes: bytes) -> Tuple[Optional[torch.Tensor], Option
 def generate_attribution(model: nn.Module, input_tensor: torch.Tensor, predicted_class_idx: int, n_steps: int = 20) -> np.ndarray:
     """Computes Integrated Gradients for the given input and class."""
     
-    # CRITICAL FIX: Captum requires standard Python int, not numpy.int64
     target_class_int = int(predicted_class_idx) 
-    
-    # CRITICAL: Enables gradient tracking for Captum
     input_tensor.requires_grad_(True) 
     
     ig = IntegratedGradients(model)
@@ -71,10 +91,9 @@ def generate_attribution(model: nn.Module, input_tensor: torch.Tensor, predicted
         inputs=input_tensor,
         baselines=baseline,
         target=target_class_int,
-        n_steps=n_steps # Using dynamic or default steps
+        n_steps=n_steps
     )
     
-    # Process Attributions: Sum across color channels and normalize the heatmap
     attributions_ig_vis = attributions_ig.squeeze(0).sum(dim=0).abs().cpu().detach().numpy()
     
     if attributions_ig_vis.max() > 0:
@@ -85,24 +104,16 @@ def generate_attribution(model: nn.Module, input_tensor: torch.Tensor, predicted
 def plot_heatmap_and_original(original_image: np.ndarray, heatmap: np.ndarray, predicted_label: str):
     """Creates a Matplotlib figure for visualization."""
     
-    # Use dynamic sizing for better responsiveness
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5)) 
-    
-    # Convert image to 0-1 range for plotting
     original_image_vis = (original_image.astype(np.float32) / 255.0) 
 
-    # --- Plot 1: Original Image ---
     ax1.imshow(original_image_vis)
     ax1.set_title("Original CT Scan", fontsize=14)
     ax1.axis('off')
 
-    # --- Plot 2: Integrated Gradients ---
     ax2.imshow(original_image_vis)
-    
-    # Dynamic alpha mask: fades out non-contributing regions
     alpha_mask = heatmap * 0.7 + 0.3 
 
-    # Aesthetic Fix: Use 'jet' colormap for clinical highlight (red/yellow)
     ax2.imshow(heatmap, cmap='jet', alpha=alpha_mask, vmin=0, vmax=1)
     ax2.set_title(f"Interpretation: {predicted_label}", fontsize=14)
     ax2.axis('off')
@@ -110,15 +121,16 @@ def plot_heatmap_and_original(original_image: np.ndarray, heatmap: np.ndarray, p
     plt.tight_layout()
     return fig
 
+# ==============================================================================
 # -------------------- STREAMLIT FRONTEND --------------------
-
+# ==============================================================================
 
 st.set_page_config(page_title="CerebAI: Stroke Prediction Dashboard", layout="wide")
 st.title("CerebAI: AI-Powered Stroke Detection")
 st.markdown("---")
 
-# Load the model
-model = load_model(MODEL_PATH)
+# FIX: Load the model using the download mechanism
+model = load_model(HF_MODEL_URL, DOWNLOAD_MODEL_PATH)
 
 if model is not None:
     # --- INTERACTIVE CONTROLS (Sidebar or Main Area) ---
@@ -146,7 +158,7 @@ if model is not None:
         image_bytes = uploaded_file.read()
         
         # --- DISPLAY AND RESULTS LAYOUT ---
-        col1, col2 = st.columns(2) # Retaining old columns structure for familiar look
+        col1, col2 = st.columns(2) 
 
         with col1:
             st.subheader("Uploaded Image")
@@ -176,7 +188,7 @@ if model is not None:
                     label="Diagnosis", 
                     value=predicted_label,
                     delta=f"{confidence_score*100:.2f}% Confidence",
-                    delta_color='normal' # Let Streamlit choose color
+                    delta_color='normal' 
                 )
                 
                 st.markdown("---")
@@ -194,6 +206,6 @@ if model is not None:
             st.subheader("Model Interpretation (Integrated Gradients)")
             
             fig = plot_heatmap_and_original(original_image_rgb, heatmap, predicted_label)
-            st.pyplot(fig, clear_figure=True, use_container_width=True) # Responsive Plot
+            st.pyplot(fig, clear_figure=True, use_container_width=True) 
 
             st.success("Analysis Complete: The heatmap highlights the regions most critical to the diagnosis.")
