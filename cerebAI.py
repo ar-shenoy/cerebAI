@@ -110,9 +110,8 @@ def plot_heatmap_and_original(original_image: np.ndarray, heatmap: np.ndarray, p
     plt.tight_layout()
     return fig
 
-# ==============================================================================
 # -------------------- STREAMLIT FRONTEND --------------------
-# ==============================================================================
+
 
 st.set_page_config(page_title="CerebAI: Stroke Prediction Dashboard", layout="wide")
 st.title("CerebAI: AI-Powered Stroke Detection")
