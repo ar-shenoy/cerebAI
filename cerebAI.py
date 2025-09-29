@@ -182,8 +182,8 @@ if model is not None:
 
         with col1:
             st.subheader("Uploaded Image")
-            st.image(image_bytes, use_container_width=True) 
-
+            st.image(original_image_rgb, use_container_width=True, caption=file_name) 
+            
         # Run Prediction and Attribution
         # FIX: Pass file_name to the preprocessing function
         input_tensor, original_image_rgb = preprocess_image(image_bytes, file_name) 
