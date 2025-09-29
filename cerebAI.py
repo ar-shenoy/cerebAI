@@ -10,21 +10,26 @@ from typing import Tuple, Optional
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import os 
-import requests # REQUIRED FOR DOWNLOADING MODEL
+import requests 
+import pydicom # REQUIRED FOR DICOM SUPPORT
+import io # REQUIRED for reading image bytes as a file
 
-# --- CONFIGURATION ---
+
+# -------------------- CONFIGURATION & MODEL LOADING --------------------
+
+
+# --- CONFIG ---
 HF_MODEL_URL = "https://huggingface.co/arshenoy/cerebAI-stroke-model/resolve/main/best_model.pth" 
-DOWNLOAD_MODEL_PATH = "best_model_cache.pth" 
+DOWNLOAD_MODEL_PATH = "best_model_cache.pth"
 CLASS_LABELS = ['No Stroke', 'Ischemic Stroke', 'Hemorrhagic Stroke']
 IMAGE_SIZE = 224
-DEVICE = torch.device("cpu") 
+DEVICE = torch.device("cpu") # For Streamlit Cloud stability
 
-# --- MODEL LOADING (UPDATED FOR DOWNLOAD) ---
+# --- MODEL LOADING ---
 @st.cache_resource
 def load_model(model_url, local_path):
     """Downloads model from URL if not cached, and loads the weights."""
     
-    # 1. Check if the file is already downloaded
     if not os.path.exists(local_path):
         st.info(f"Model not found locally. Downloading from remote repository...")
         try:
@@ -36,10 +41,9 @@ def load_model(model_url, local_path):
                     f.write(chunk)
             st.success("Model download complete!")
         except Exception as e:
-            st.error(f"FATAL ERROR: Could not download model from {model_url}. Check the URL. Error: {e}")
+            st.error(f"FATAL ERROR: Could not download model. Error: {e}")
             return None
 
-    # 2. Load the model weights
     try:
         model = timm.create_model('convnext_base', pretrained=False)
         model.reset_classifier(num_classes=len(CLASS_LABELS))
@@ -51,23 +55,44 @@ def load_model(model_url, local_path):
         st.error(f"Failed to load model weights from cache. Error: {e}")
         return None
 
-# --- HELPER FUNCTIONS ---
+
+# -------------------- HELPER FUNCTIONS --------------------
+
 
 def denormalize_image(tensor: torch.Tensor) -> np.ndarray:
     """Denormalizes a PyTorch tensor for matplotlib visualization."""
     if tensor.ndim == 4:
-        tensor = tensor.squeeze(0)
+        tensor = tensor.squeeze(0).detach() 
+    else:
+        tensor = tensor.detach() 
     
     mean, std = np.array([0.5, 0.5, 0.5]), np.array([0.5, 0.5, 0.5])
     img = tensor.cpu().permute(1, 2, 0).numpy()
     img = (img * std) + mean
     return np.clip(img, 0, 1)
 
-def preprocess_image(image_bytes: bytes) -> Tuple[Optional[torch.Tensor], Optional[np.ndarray]]:
-    """Loads, resizes, and normalizes the image for model input."""
-    image = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_GRAYSCALE)
-    if image is None: return None, None
-    image_rgb = cv2.cvtColor(cv2.resize(image, (IMAGE_SIZE, IMAGE_SIZE)), cv2.COLOR_GRAY2RGB)
+def preprocess_image(image_bytes: bytes, file_name: str) -> Tuple[Optional[torch.Tensor], Optional[np.ndarray]]:
+    """Loads, processes, and normalizes image, handling DICOM or JPG/PNG."""
+    
+    # 1. READ IMAGE DATA (Handles DICOM vs Standard formats)
+    if file_name.lower().endswith(('.dcm', '.dicom')):
+        try:
+            dcm = pydicom.dcmread(io.BytesIO(image_bytes))
+            pixel_array = dcm.pixel_array.astype(np.float32)
+            
+            # Simple intensity scaling for visualization/processing
+            pixel_array = (pixel_array - np.min(pixel_array)) / (np.max(pixel_array) - np.min(pixel_array))
+            pixel_array = (pixel_array * 255).astype(np.uint8)
+            image_grayscale = pixel_array
+        except Exception:
+            return None, None
+    else:
+        # Read standard image (PNG/JPG)
+        image_grayscale = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_GRAYSCALE)
+        if image_grayscale is None: return None, None
+            
+    # 2. STANDARD PREPROCESSING (The rest of your original logic)
+    image_rgb = cv2.cvtColor(cv2.resize(image_grayscale, (IMAGE_SIZE, IMAGE_SIZE)), cv2.COLOR_GRAY2RGB)
     
     image_norm = (image_rgb.astype(np.float32) / 255.0 - 0.5) / 0.5
     input_tensor = torch.tensor(image_norm, dtype=torch.float).permute(2, 0, 1).unsqueeze(0)
@@ -76,7 +101,6 @@ def preprocess_image(image_bytes: bytes) -> Tuple[Optional[torch.Tensor], Option
 
 def generate_attribution(model: nn.Module, input_tensor: torch.Tensor, predicted_class_idx: int, n_steps: int = 20) -> np.ndarray:
     """Computes Integrated Gradients for the given input and class."""
-    
     target_class_int = int(predicted_class_idx) 
     input_tensor.requires_grad_(True) 
     
@@ -99,7 +123,6 @@ def generate_attribution(model: nn.Module, input_tensor: torch.Tensor, predicted
 
 def plot_heatmap_and_original(original_image: np.ndarray, heatmap: np.ndarray, predicted_label: str):
     """Creates a Matplotlib figure for visualization."""
-    
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5)) 
     original_image_vis = (original_image.astype(np.float32) / 255.0) 
 
@@ -117,9 +140,9 @@ def plot_heatmap_and_original(original_image: np.ndarray, heatmap: np.ndarray, p
     plt.tight_layout()
     return fig
 
-# ==============================================================================
+
 # -------------------- STREAMLIT FRONTEND --------------------
-# ==============================================================================
+
 
 st.set_page_config(page_title="CerebAI: Stroke Prediction Dashboard", layout="wide")
 st.title("CerebAI: AI-Powered Stroke Detection")
@@ -136,7 +159,7 @@ if model is not None:
         'Integration Steps (Affects Accuracy & Speed)',
         min_value=5, 
         max_value=50, 
-        value=20, # Default to a safe, medium-speed value
+        value=20, 
         step=5,
         help="Higher steps (up to 50) provide a smoother, more accurate heatmap but use more CPU."
     )
@@ -146,12 +169,13 @@ if model is not None:
     # --- FILE UPLOAD ---
     st.markdown("### Upload CT Scan Image")
     uploaded_file = st.file_uploader(
-        "Choose a PNG, JPG, or JPEG file", 
-        type=["png", "jpg", "jpeg"]
+        "Choose a Dicom, PNG, JPG, or JPEG file", 
+        type=["dcm", "dicom", "png", "jpg", "jpeg"]
     )
 
     if uploaded_file is not None:
         image_bytes = uploaded_file.read()
+        file_name = uploaded_file.name # Get file name for DICOM check
         
         # --- DISPLAY AND RESULTS LAYOUT ---
         col1, col2 = st.columns(2) 
@@ -161,7 +185,8 @@ if model is not None:
             st.image(image_bytes, use_container_width=True) 
 
         # Run Prediction and Attribution
-        input_tensor, original_image_rgb = preprocess_image(image_bytes)
+        # FIX: Pass file_name to the preprocessing function
+        input_tensor, original_image_rgb = preprocess_image(image_bytes, file_name) 
         
         if input_tensor is not None:
             # Predict
