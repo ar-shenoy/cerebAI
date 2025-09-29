@@ -11,16 +11,17 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import os 
 import requests 
-import pydicom 
+import pydicom # REQUIRED FOR DICOM SUPPORT
 import io 
-import gc # For aggressive memory management
+import gc # For memory management
 
 # --- CONFIGURATION ---
+# >>> IMPORTANT: REPLACE THIS URL WITH YOUR ACTUAL HUGGING FACE LINK! <<<
 HF_MODEL_URL = "https://huggingface.co/arshenoy/cerebAI-stroke-model/resolve/main/best_model.pth" 
 DOWNLOAD_MODEL_PATH = "best_model_cache.pth"
 CLASS_LABELS = ['No Stroke', 'Ischemic Stroke', 'Hemorrhagic Stroke']
 IMAGE_SIZE = 224
-DEVICE = torch.device("cpu") 
+DEVICE = torch.device("cpu") # For Streamlit Cloud stability
 
 # --- MODEL LOADING ---
 @st.cache_resource
@@ -73,12 +74,24 @@ def preprocess_image(image_bytes: bytes, file_name: str) -> Tuple[Optional[torch
     if file_name.lower().endswith(('.dcm', '.dicom')):
         try:
             dcm = pydicom.dcmread(io.BytesIO(image_bytes))
-            pixel_array = dcm.pixel_array.astype(np.float32)
             
-            # Simple intensity scaling for visualization/processing
-            pixel_array = (pixel_array - np.min(pixel_array)) / (np.max(pixel_array) - np.min(pixel_array))
-            pixel_array = (pixel_array * 255).astype(np.uint8)
-            image_grayscale = pixel_array
+            # FIX: Convert to Hounsfield Units (HU)
+            pixel_array = dcm.pixel_array.astype(np.int16)
+            slope = dcm.RescaleSlope
+            intercept = dcm.RescaleIntercept
+            pixel_array = pixel_array * slope + intercept
+            
+            # Apply Standard Brain Window (-100 HU to 150 HU)
+            window_center = 40 
+            window_width = 150
+            min_hu = window_center - (window_width / 2)
+            max_hu = window_center + (window_width / 2)
+            
+            # Apply the windowing transformation and scale to 0-255
+            pixel_array[pixel_array < min_hu] = min_hu
+            pixel_array[pixel_array > max_hu] = max_hu
+            image_grayscale = ((pixel_array - min_hu) / (max_hu - min_hu) * 255).astype(np.uint8)
+            
         except Exception:
             return None, None
     else:
@@ -150,12 +163,11 @@ if model is not None:
     # --- INTERACTIVE CONTROLS (Sidebar or Main Area) ---
     st.markdown("### Analysis Controls")
     
-    # MEMORY FIX: Set default steps to 10 for stability on 1GB RAM servers
     n_steps_slider = st.slider(
         'Integration Steps (Affects Accuracy & Speed)',
         min_value=5, 
         max_value=50, 
-        value=10, 
+        value=20, 
         step=5,
         help="Higher steps (up to 50) provide a smoother, more accurate heatmap but use more CPU."
     )
@@ -173,16 +185,15 @@ if model is not None:
         image_bytes = uploaded_file.read()
         file_name = uploaded_file.name 
         
-        # --- DISPLAY AND RESULTS LAYOUT ---
-        col1, col2 = st.columns(2) 
-
         # 1. PROCESS IMAGE FIRST (Defines original_image_rgb)
         input_tensor, original_image_rgb = preprocess_image(image_bytes, file_name) 
 
-        # 2. DISPLAY UPLOADED IMAGE
+        # --- DISPLAY AND RESULTS LAYOUT ---
+        col1, col2 = st.columns(2) 
+
         with col1:
             st.subheader("Uploaded Image")
-            # Display the processed NumPy array, not the raw bytes
+            # Display the processed NumPy array
             st.image(original_image_rgb, use_container_width=True, caption=file_name) 
 
         # Run Prediction and Attribution
@@ -200,10 +211,9 @@ if model is not None:
             heatmap = generate_attribution(model, input_tensor, predicted_class_idx, n_steps=n_steps_slider)
             
             # CRITICAL MEMORY MANAGEMENT
-            del input_tensor # Delete large tensor after prediction
+            del input_tensor 
             del output
-            torch.cuda.empty_cache()
-            gc.collect() # Force cleanup
+            gc.collect() 
 
             with col2:
                 st.subheader("Prediction Summary")
