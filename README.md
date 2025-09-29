@@ -27,15 +27,19 @@ The system uses **Integrated Gradients (IG)** from the Captum library to generat
     cd cerebai_streamlit
     ```
 2.  **Activate Environment:** Ensure your virtual environment is active.
+
+    ```bash
+    python -m venv venv
+    ```
     ```bash
     .\venv\Scripts\activate
     ```
-3.  **Install Dependencies:**
+5.  **Install Dependencies:**
     ```bash
     pip install -r requirements.txt
     ```
-4.  **Place Model Weights:** Ensure your trained model file (`best_model.pth`) is in the project root directory.
-5.  **Launch App:**
+6.  **Place Model Weights:** Ensure your trained model file (`best_model.pth`) is in the project root directory.
+7.  **Launch App:**
     ```bash
     streamlit run cerebAI.py
     ```
