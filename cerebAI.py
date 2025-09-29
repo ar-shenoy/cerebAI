@@ -11,19 +11,16 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import os 
 import requests 
-import pydicom # REQUIRED FOR DICOM SUPPORT
-import io # REQUIRED for reading image bytes as a file
+import pydicom 
+import io 
+import gc # For aggressive memory management
 
-
-# -------------------- CONFIGURATION & MODEL LOADING --------------------
-
-
-# --- CONFIG ---
+# --- CONFIGURATION ---
 HF_MODEL_URL = "https://huggingface.co/arshenoy/cerebAI-stroke-model/resolve/main/best_model.pth" 
 DOWNLOAD_MODEL_PATH = "best_model_cache.pth"
 CLASS_LABELS = ['No Stroke', 'Ischemic Stroke', 'Hemorrhagic Stroke']
 IMAGE_SIZE = 224
-DEVICE = torch.device("cpu") # For Streamlit Cloud stability
+DEVICE = torch.device("cpu") 
 
 # --- MODEL LOADING ---
 @st.cache_resource
@@ -41,7 +38,7 @@ def load_model(model_url, local_path):
                     f.write(chunk)
             st.success("Model download complete!")
         except Exception as e:
-            st.error(f"FATAL ERROR: Could not download model. Error: {e}")
+            st.error(f"FATAL ERROR: Could not download model. Check the URL. Error: {e}")
             return None
 
     try:
@@ -55,9 +52,7 @@ def load_model(model_url, local_path):
         st.error(f"Failed to load model weights from cache. Error: {e}")
         return None
 
-
-# -------------------- HELPER FUNCTIONS --------------------
-
+# --- HELPER FUNCTIONS ---
 
 def denormalize_image(tensor: torch.Tensor) -> np.ndarray:
     """Denormalizes a PyTorch tensor for matplotlib visualization."""
@@ -91,7 +86,7 @@ def preprocess_image(image_bytes: bytes, file_name: str) -> Tuple[Optional[torch
         image_grayscale = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_GRAYSCALE)
         if image_grayscale is None: return None, None
             
-    # 2. STANDARD PREPROCESSING (The rest of your original logic)
+    # 2. STANDARD PREPROCESSING
     image_rgb = cv2.cvtColor(cv2.resize(image_grayscale, (IMAGE_SIZE, IMAGE_SIZE)), cv2.COLOR_GRAY2RGB)
     
     image_norm = (image_rgb.astype(np.float32) / 255.0 - 0.5) / 0.5
@@ -140,9 +135,9 @@ def plot_heatmap_and_original(original_image: np.ndarray, heatmap: np.ndarray, p
     plt.tight_layout()
     return fig
 
-
+# ==============================================================================
 # -------------------- STREAMLIT FRONTEND --------------------
-
+# ==============================================================================
 
 st.set_page_config(page_title="CerebAI: Stroke Prediction Dashboard", layout="wide")
 st.title("CerebAI: AI-Powered Stroke Detection")
@@ -155,11 +150,12 @@ if model is not None:
     # --- INTERACTIVE CONTROLS (Sidebar or Main Area) ---
     st.markdown("### Analysis Controls")
     
+    # MEMORY FIX: Set default steps to 10 for stability on 1GB RAM servers
     n_steps_slider = st.slider(
         'Integration Steps (Affects Accuracy & Speed)',
         min_value=5, 
         max_value=50, 
-        value=20, 
+        value=10, 
         step=5,
         help="Higher steps (up to 50) provide a smoother, more accurate heatmap but use more CPU."
     )
@@ -175,19 +171,21 @@ if model is not None:
 
     if uploaded_file is not None:
         image_bytes = uploaded_file.read()
-        file_name = uploaded_file.name # Get file name for DICOM check
+        file_name = uploaded_file.name 
         
         # --- DISPLAY AND RESULTS LAYOUT ---
         col1, col2 = st.columns(2) 
 
+        # 1. PROCESS IMAGE FIRST (Defines original_image_rgb)
+        input_tensor, original_image_rgb = preprocess_image(image_bytes, file_name) 
+
+        # 2. DISPLAY UPLOADED IMAGE
         with col1:
             st.subheader("Uploaded Image")
+            # Display the processed NumPy array, not the raw bytes
             st.image(original_image_rgb, use_container_width=True, caption=file_name) 
-            
+
         # Run Prediction and Attribution
-        # FIX: Pass file_name to the preprocessing function
-        input_tensor, original_image_rgb = preprocess_image(image_bytes, file_name) 
-        
         if input_tensor is not None:
             # Predict
             with torch.no_grad():
@@ -201,10 +199,15 @@ if model is not None:
             # Generate Attribution
             heatmap = generate_attribution(model, input_tensor, predicted_class_idx, n_steps=n_steps_slider)
             
+            # CRITICAL MEMORY MANAGEMENT
+            del input_tensor # Delete large tensor after prediction
+            del output
+            torch.cuda.empty_cache()
+            gc.collect() # Force cleanup
+
             with col2:
                 st.subheader("Prediction Summary")
                 
-                # Metric based on prediction
                 st.metric(
                     label="Diagnosis", 
                     value=predicted_label,
@@ -215,7 +218,6 @@ if model is not None:
                 st.markdown("---")
                 st.subheader("Confidence Breakdown")
                 
-                # Display probabilities in a clean, professional table
                 prob_data = {
                     'Class': CLASS_LABELS,
                     'Confidence': [f"{p:.4f}" for p in probabilities]
