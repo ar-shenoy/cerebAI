@@ -16,7 +16,6 @@ import io
 import gc # For memory management
 
 # --- CONFIGURATION ---
-# >>> IMPORTANT: REPLACE THIS URL WITH YOUR ACTUAL HUGGING FACE LINK! <<<
 HF_MODEL_URL = "https://huggingface.co/arshenoy/cerebAI-stroke-model/resolve/main/best_model.pth" 
 DOWNLOAD_MODEL_PATH = "best_model_cache.pth"
 CLASS_LABELS = ['No Stroke', 'Ischemic Stroke', 'Hemorrhagic Stroke']
