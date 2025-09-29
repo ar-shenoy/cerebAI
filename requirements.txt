@@ -7,3 +7,4 @@ albumentations>=1.4.0
 captum
 scikit-learn
 matplotlib
+pydicom
